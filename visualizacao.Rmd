@@ -1,0 +1,237 @@
+---
+title: "Análise de Finalizações de Mohamed Salah"
+author: "Leonardo Nogueira"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+lang: pt-br
+---
+
+## Resumo
+
+Este relatório explora dados de finalizações do jogador Mohamed Salah com o objetivo de entender padrões em seu desempenho ofensivo. A análise abrange:
+
+- **Leitura e limpeza dos dados brutos**;
+- **Exploração estatística de variáveis relevantes** como tipo de chute, local da partida, resultado da finalização e assistências;
+- **Visualizações interativas** usando `ggplot2`, incluindo gráficos de dispersão, histogramas, boxplots, gráficos de linha e barras empilhadas;
+- **Interpretações visuais** sobre a eficiência, qualidade das chances (xG) e tendências ao longo do tempo.
+
+Os dados utilizados foram obtidos de uma base contendo estatísticas detalhadas das finalizações de Salah em jogos por temporada.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(summarytools)
+library(forcats)
+library(scales)
+library(patchwork)
+```
+
+## Leitura e limpeza dos dados
+
+```{r}
+salah_raw <- read_delim("./ShotsAnalizeSalah.csv", delim = ";", locale = locale(encoding = "latin1"))
+
+salah_clean <- salah_raw %>%
+  clean_names() %>%
+  mutate(date = dmy_hm(date))
+
+glimpse(salah_clean)
+```
+
+## Sumário das variáveis
+
+```{r}
+dfSummary(salah_clean) %>% view()
+```
+
+## Análise exploratória
+
+```{r}
+# Eficiência por tipo de chute
+salah_clean %>%
+  group_by(shot_type) %>%
+  summarize(
+    quantidade = n(),
+    gols = sum(result == "Goal", na.rm = TRUE),
+    taxa_conversao = (gols / quantidade) * 100,
+    xg_medio = mean(x_g, na.rm = TRUE)
+  ) %>%
+  arrange(desc(quantidade))
+
+# Desempenho em casa vs fora
+salah_clean %>%
+  group_by(h_a) %>%
+  summarize(
+    quantidade_chutes = n(),
+    gols = sum(result == "Goal", na.rm = TRUE),
+    taxa_conversao = (gols / quantidade_chutes) * 100,
+    xg_medio_por_chute = mean(x_g, na.rm = TRUE)
+  )
+
+# Conversão de pênaltis
+salah_clean %>%
+  filter(situation == "Penalty") %>%
+  summarize(
+    total_penaltis = n(),
+    gols_de_penalti = sum(result == "Goal", na.rm = TRUE),
+    taxa_conversao_penalti = (gols_de_penalti / total_penaltis) * 100
+  )
+
+# xG por tipo de última ação
+salah_clean %>%
+  group_by(last_action) %>%
+  summarize(
+    quantidade = n(),
+    xg_medio = mean(x_g, na.rm = TRUE)
+  ) %>%
+  filter(quantidade > 10) %>%
+  arrange(desc(xg_medio))
+```
+
+## Gráfico de dispersão com regressão
+
+```{r}
+salah_clean <- salah_clean %>%
+  mutate(is_goal = ifelse(result == "Goal", "Gol", "Não Gol"))
+
+ggplot(salah_clean, aes(x = minute, y = x_g)) +
+  geom_point(aes(color = is_goal), alpha = 0.6) +
+  geom_smooth(aes(color = is_goal), method = "lm", se = FALSE, linewidth = 1) +
+  scale_color_manual(values = c("Gol" = "red", "Não Gol" = "skyblue")) +
+  labs(
+    title = "Relação entre xG e Minuto do Jogo",
+    subtitle = "Chances mais claras resultam em mais gols, independentemente do tempo",
+    x = "Minuto do Jogo",
+    y = "Gols Esperados (xG)",
+    color = "Resultado"
+  ) +
+  theme_minimal()
+```
+
+## Histogramas
+
+```{r}
+# Distribuição do xG por pé e local da partida
+salah_clean %>%
+  filter(shot_type %in% c("LeftFoot", "RightFoot")) %>%
+  ggplot(aes(x = x_g, fill = shot_type)) +
+  geom_histogram(alpha = 0.7, position = "identity", binwidth = 0.1) +
+  scale_x_log10() +
+  facet_wrap(~ h_a) +
+  labs(
+    title = "Distribuição de xG por Tipo de Chute",
+    subtitle = "Pé esquerdo gera finalizações mais perigosas",
+    x = "xG (log10)",
+    y = "Quantidade de Chutes",
+    fill = "Tipo de Chute"
+  ) +
+  theme_minimal()
+
+# Distribuição de chutes por minuto da partida
+rotulos_local <- c(`h` = "Jogos em Casa", `a` = "Jogos Fora")
+
+salah_clean %>%
+  ggplot(aes(x = minute)) +
+  geom_histogram(binwidth = 5, fill = "#c41e3a", color = "white", alpha = 0.9) +
+  geom_vline(xintercept = 45, linetype = "dashed") +
+  geom_vline(xintercept = 90, linetype = "dashed") +
+  facet_wrap(~ h_a, labeller = as_labeller(rotulos_local)) +
+  labs(
+    title = "Distribuição de Chutes ao Longo da Partida",
+    subtitle = "Picos perto dos intervalos sugerem aumento de pressão",
+    x = "Minuto do Jogo",
+    y = "Quantidade de Chutes"
+  ) +
+  theme_minimal()
+```
+
+## Boxplots
+
+```{r}
+salah_clean %>%
+  filter(result %in% c("Goal", "SavedShot", "MissedShots")) %>%
+  ggplot(aes(x = fct_reorder(result, x_g, .fun = median), y = x_g, fill = result)) +
+  geom_boxplot(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Distribuição de xG por Resultado do Chute",
+    subtitle = "Chances com maior xG resultam mais em gols",
+    x = "Resultado do Chute",
+    y = "xG"
+  ) +
+  theme_minimal()
+```
+
+## Barras empilhadas e lado a lado
+
+```{r}
+# Proporção de resultados por tipo de chute
+salah_clean %>%
+  filter(shot_type %in% c("LeftFoot", "RightFoot"),
+         result %in% c("Goal", "SavedShot", "BlockedShot")) %>%
+  ggplot(aes(x = shot_type, fill = result)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  scale_fill_brewer(palette = "Spectral") +
+  labs(
+    title = "Proporção de Resultados por Pé Utilizado",
+    x = "Tipo de Chute",
+    y = "Proporção",
+    fill = "Resultado"
+  ) +
+  theme_minimal()
+
+# Top 5 assistentes
+top_5_assistentes <- salah_clean %>%
+  filter(result == "Goal", !is.na(player_assisted)) %>%
+  count(player_assisted, sort = TRUE) %>%
+  slice_max(n, n = 5)
+
+salah_clean %>%
+  filter(player_assisted %in% top_5_assistentes$player_assisted,
+         result == "Goal") %>%
+  ggplot(aes(x = fct_reorder(player_assisted, player_assisted, .fun = 'length', .desc = TRUE), fill = h_a)) +
+  geom_bar(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Top 5 Assistentes para Gols de Salah",
+    subtitle = "Comparando assistências em casa vs. fora",
+    x = "Jogador",
+    y = "Quantidade de Gols com Assistência",
+    fill = "Local da Partida"
+  ) +
+  theme_minimal()
+```
+
+## Gráfico de linha (tendência por temporada)
+
+```{r}
+dados_por_temporada <- salah_clean %>%
+  group_by(season) %>%
+  summarize(
+    total_chutes = n(),
+    xg_medio = mean(x_g, na.rm = TRUE)
+  )
+
+p1 <- ggplot(dados_por_temporada, aes(x = season, y = total_chutes)) +
+  geom_line(color = "skyblue", linewidth = 1.2) +
+  geom_point(color = "blue", size = 3) +
+  labs(title = "Volume de Chutes por Temporada", x = NULL, y = "Total de Chutes") +
+  theme_minimal()
+
+p2 <- ggplot(dados_por_temporada, aes(x = season, y = xg_medio)) +
+  geom_line(color = "salmon", linewidth = 1.2) +
+  geom_point(color = "darkred", size = 3) +
+  labs(title = "xG Médio por Temporada", x = "Temporada", y = "xG Médio") +
+  theme_minimal()
+
+p1 / p2
+```
